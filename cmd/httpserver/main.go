@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/Barrioslopezfd/httpfromtcp/cmd/server"
+	"github.com/Barrioslopezfd/httpfromtcp/internal/headers"
 	"github.com/Barrioslopezfd/httpfromtcp/internal/request"
 	"github.com/Barrioslopezfd/httpfromtcp/internal/response"
 )
@@ -17,7 +20,7 @@ import (
 const port = 42069
 
 func main() {
-	server, err := server.Serve(handlerChunk, port)
+	server, err := server.Serve(handler, port)
 	if err != nil {
 		log.Fatalf("Error starting server: %v", err)
 	}
@@ -30,31 +33,47 @@ func main() {
 	log.Println("Server gracefully stopped")
 }
 
-func handler(w *response.Writer, req *request.Request) {
-	if req.RequestLine.RequestTarget == "/yourproblem" {
-		body := toHtmlString(400, "Bad Request", "Your request honestly kinda sucked.")
-		w.WriteStatusLine(response.BAD_REQUEST)
-		req.Headers.Set("Content-Type", "text/html")
-		req.Headers.Set("Content-Length", fmt.Sprint(len(body)))
-		w.WriteHeaders(req.Headers)
-		w.WriteBody(fmt.Appendf(nil, body))
+func handler(w *response.Writer, r *request.Request) {
+	if strings.HasPrefix(r.RequestLine.RequestTarget, "/httpbin") {
+		handlerChunk(w, r)
+		return
+	}
+	if r.RequestLine.RequestTarget == "/yourproblem" {
+		handler400(w, r)
 		return
 	}
 
-	if req.RequestLine.RequestTarget == "/myproblem" {
-		w.WriteStatusLine(response.INTERNAL_SERVER_ERROR)
-		body := toHtmlString(500, "Internal Server Error", "Okay, you know what? This one is on me")
-		req.Headers.Set("Content-Type", "text/html")
-		req.Headers.Set("Content-Length", fmt.Sprint(len(body)))
-		w.WriteHeaders(req.Headers)
-		w.WriteBody(fmt.Appendf(nil, body))
+	if r.RequestLine.RequestTarget == "/myproblem" {
+		handler500(w, r)
 		return
 	}
+	handler200(w, r)
+}
+
+func handler200(w *response.Writer, r *request.Request) {
 	w.WriteStatusLine(response.OK)
 	body := toHtmlString(200, "Success!!", "Your request was an absolute banger.")
-	req.Headers.Set("Content-Type", "text/html")
-	req.Headers.Set("Content-Length", fmt.Sprint(len(body)))
-	w.WriteHeaders(req.Headers)
+	r.Headers.Replace("Content-Type", "text/html")
+	r.Headers.Replace("Content-Length", fmt.Sprint(len(body)))
+	w.WriteHeaders(r.Headers)
+	w.WriteBody(fmt.Appendf(nil, body))
+}
+
+func handler500(w *response.Writer, r *request.Request) {
+	w.WriteStatusLine(response.INTERNAL_SERVER_ERROR)
+	body := toHtmlString(500, "Internal Server Error", "Okay, you know what? This one is on me")
+	r.Headers.Replace("Content-Type", "text/html")
+	r.Headers.Replace("Content-Length", fmt.Sprint(len(body)))
+	w.WriteHeaders(r.Headers)
+	w.WriteBody(fmt.Appendf(nil, body))
+}
+
+func handler400(w *response.Writer, r *request.Request) {
+	body := toHtmlString(400, "Bad Request", "Your request honestly kinda sucked.")
+	w.WriteStatusLine(response.BAD_REQUEST)
+	r.Headers.Replace("Content-Type", "text/html")
+	r.Headers.Replace("Content-Length", fmt.Sprint(len(body)))
+	w.WriteHeaders(r.Headers)
 	w.WriteBody(fmt.Appendf(nil, body))
 }
 
@@ -70,39 +89,56 @@ func toHtmlString(code int, errorMsg string, body string) string {
 	</html>`, code, errorMsg, errorMsg, body)
 }
 
-func handlerChunk(w *response.Writer, req *request.Request) {
-	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/") {
-		httpbinPath := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin/")
-
-		httpbinURL := "https://httpbin.org/" + httpbinPath
-
-		httpbinResp, err := http.Get(httpbinURL)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer httpbinResp.Body.Close()
-
-		w.WriteStatusLine(response.Code((httpbinResp.StatusCode)))
-
-		req.Headers.Set("Transfer-Encoding", "chunked")
-		for key, value := range httpbinResp.Header {
-			req.Headers.Set(key, strings.Join(value, ","))
-		}
-
-		w.WriteHeaders(req.Headers)
-
-		buffer := make([]byte, 1024)
-		for {
-			n, err := httpbinResp.Body.Read(buffer)
-			if n > 0 {
-				w.WriteChunkedBody(buffer[:n])
-			}
+func handlerChunk(w *response.Writer, r *request.Request) {
+	path := strings.TrimPrefix(r.RequestLine.RequestTarget, "/httpbin/")
+	url := "https://httpbin.org/" + path
+	res, err := http.Get(url)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer res.Body.Close()
+	err = w.WriteStatusLine(response.OK)
+	if err != nil {
+		log.Fatal(err)
+	}
+	h := response.GetDefaultHeaders()
+	h.Remove("Content-Length")
+	h.Replace("Content-Type", "text/html")
+	h.Replace("Transfer-Encoding", "chunked")
+	h.Set("trailer", "x-content-sha256, x-content-length")
+	w.WriteHeaders(h)
+	buffer := make([]byte, 1024)
+	body := make([]byte, 0)
+	for {
+		n, err := res.Body.Read(buffer)
+		fmt.Println("Read", n, "bytes")
+		if n > 0 {
+			_, err := w.WriteChunkedBody(buffer[:n])
 			if err != nil {
+				fmt.Println("Error writing chunked body:", err.Error())
 				break
 			}
+			body = append(body, buffer[:n]...)
 		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("Error reading response body:", err.Error())
+			break
+		}
+	}
+	_, err = w.WriteChunkedBodyDone()
+	if err != nil {
+		fmt.Println("Error writing chunked body done:", err.Error())
+	}
 
-		w.WriteChunkedBodyDone()
-		return
+	trailer := headers.NewHeaders()
+	sha := sha256.Sum256(body)
+	trailer.Set("X-Content-SHA256", fmt.Sprintf("%x", sha))
+	trailer.Set("X-Content-Length", fmt.Sprint(len(body)))
+	err = w.WriteTrailers(trailer)
+	if err != nil {
+		fmt.Println(err.Error())
 	}
 }

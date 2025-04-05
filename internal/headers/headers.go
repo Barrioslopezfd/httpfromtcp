@@ -20,7 +20,7 @@ type field_line struct {
 type Headers map[string]string
 
 func NewHeaders() Headers {
-	return make(Headers)
+	return map[string]string{}
 }
 
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {
@@ -55,7 +55,22 @@ func (h Headers) Get(key string) (value string, ok bool) {
 
 func (h Headers) Set(key string, value string) {
 	key = strings.ToLower(key)
+	v, ok := h[key]
+	if ok {
+		value = strings.Join([]string{v, value}, ", ")
+	}
+	print("HEYYYYY - ", key, ": ", value, "\n")
 	h[key] = value
+}
+
+func (h Headers) Replace(key string, value string) {
+	key = strings.ToLower(key)
+	h[key] = value
+}
+
+func (h Headers) Remove(key string) {
+	key = strings.ToLower(key)
+	delete(h, key)
 }
 
 func parseHeader(data []byte) (field *field_line, n int, err error) {
@@ -97,7 +112,7 @@ func parseHeaderString(line string) (field *field_line, err error) {
 
 	field = &field_line{
 		field_name:  strings.ToLower(strings.TrimLeft(parts[0], " ")),
-		field_value: strings.ToLower(strings.Trim(parts[1], " ")),
+		field_value: strings.Trim(parts[1], " "),
 	}
 
 	return field, nil

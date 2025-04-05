@@ -53,22 +53,23 @@ func (w *Writer) WriteStatusLine(code Code) error {
 	return nil
 }
 
-func getDifaultHeaders() headers.Headers {
-	return headers.Headers{
-		"Content-Length": "0",
-		"Connection":     "close",
-		"Content-Type":   "text/plain",
-	}
+func GetDefaultHeaders() headers.Headers {
+	h := headers.NewHeaders()
+
+	h.Set("Content-Length", "0")
+	h.Set("Connection", "close")
+	h.Set("Content-Type", "text/plain")
+	return h
 }
 
 func (w *Writer) WriteHeaders(headers headers.Headers) error {
 	if w.writerState != HEADERS {
-		return fmt.Errorf("error, status line not found")
+		return fmt.Errorf("trying to write to header without write header state")
 	}
 	for key, value := range headers {
 		_, err := w.Writer.Write(fmt.Appendf(nil, "%s: %s\r\n", key, value))
 		if err != nil {
-			return fmt.Errorf("error while writing headers, err=%s", err.Error())
+			return fmt.Errorf("error while writing headers on loop, err=%s", err.Error())
 		}
 	}
 	_, err := w.Writer.Write([]byte("\r\n"))
@@ -91,26 +92,42 @@ func (w *Writer) WriteBody(body []byte) (int, error) {
 }
 
 func (w *Writer) WriteChunkedBody(body []byte) (int, error) {
+	if w.writerState != BODY {
+		return 0, fmt.Errorf("error, headers not found")
+	}
+	total := 0
 	lengthLine := fmt.Sprintf("%x\r\n", len(body))
-	_, err := w.Writer.Write(fmt.Appendf(nil, lengthLine))
+	read, err := w.Writer.Write(fmt.Appendf(nil, lengthLine))
 	if err != nil {
-		return 0, err
+		return total, err
 	}
-	read, err := w.Writer.Write(body)
+	total += read
+	read, err = w.Writer.Write(body)
 	if err != nil {
-		return 0, err
+		return total, err
 	}
-	_, err = w.Writer.Write([]byte("\r\n"))
+	total += read
+	read, err = w.Writer.Write([]byte("\r\n"))
 	if err != nil {
-		return 0, err
+		return total, err
 	}
-	return read, nil
+	total += read
+	return total, nil
 }
 
 func (w *Writer) WriteChunkedBodyDone() (int, error) {
-	_, err := w.Writer.Write([]byte("0\r\n\r\n"))
-	if err != nil {
-		return 0, err
+	if w.writerState != BODY {
+		return 0, fmt.Errorf("error, headers not found")
 	}
-	return 0, nil
+	return w.Writer.Write([]byte("0\r\n"))
+}
+
+func (w *Writer) WriteTrailers(h headers.Headers) error {
+	buffer := ""
+	for key, value := range h {
+		buffer += fmt.Sprintf("%s: %s\r\n", key, value)
+	}
+	buffer += "\r\n"
+	_, err := w.Writer.Write([]byte(buffer))
+	return err
 }
