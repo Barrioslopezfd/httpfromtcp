@@ -34,6 +34,10 @@ func main() {
 }
 
 func handler(w *response.Writer, r *request.Request) {
+	if r.RequestLine.RequestTarget == "/video" {
+		handleVideo(w, r)
+		return
+	}
 	if strings.HasPrefix(r.RequestLine.RequestTarget, "/httpbin") {
 		handlerChunk(w, r)
 		return
@@ -101,7 +105,7 @@ func handlerChunk(w *response.Writer, r *request.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	h := response.GetDefaultHeaders()
+	h := response.GetDefaultHeaders(0)
 	h.Remove("Content-Length")
 	h.Replace("Content-Type", "text/html")
 	h.Replace("Transfer-Encoding", "chunked")
@@ -140,5 +144,36 @@ func handlerChunk(w *response.Writer, r *request.Request) {
 	err = w.WriteTrailers(trailer)
 	if err != nil {
 		fmt.Println(err.Error())
+	}
+
+	err = w.WriteDone()
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+}
+
+func handleVideo(w *response.Writer, r *request.Request) {
+	f, err := os.ReadFile("assets/vim.mp4")
+	if err != nil {
+		handler400(w, r)
+		return
+	}
+	err = w.WriteStatusLine(response.OK)
+	if err != nil {
+		fmt.Println(err)
+	}
+	h := response.GetDefaultHeaders(len(f))
+	h.Replace("Content-Type", "video/mp4")
+	err = w.WriteHeaders(h)
+	if err != nil {
+		fmt.Println(err)
+	}
+	_, err = w.WriteBody(f)
+	if err != nil {
+		fmt.Println(err)
+	}
+	err = w.WriteDone()
+	if err != nil {
+		fmt.Println(err)
 	}
 }

@@ -59,7 +59,6 @@ func (h Headers) Set(key string, value string) {
 	if ok {
 		value = strings.Join([]string{v, value}, ", ")
 	}
-	print("HEYYYYY - ", key, ": ", value, "\n")
 	h[key] = value
 }
 

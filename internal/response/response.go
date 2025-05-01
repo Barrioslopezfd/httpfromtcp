@@ -53,10 +53,10 @@ func (w *Writer) WriteStatusLine(code Code) error {
 	return nil
 }
 
-func GetDefaultHeaders() headers.Headers {
+func GetDefaultHeaders(l int) headers.Headers {
 	h := headers.NewHeaders()
 
-	h.Set("Content-Length", "0")
+	h.Set("Content-Length", fmt.Sprint(l))
 	h.Set("Connection", "close")
 	h.Set("Content-Type", "text/plain")
 	return h
@@ -127,7 +127,11 @@ func (w *Writer) WriteTrailers(h headers.Headers) error {
 	for key, value := range h {
 		buffer += fmt.Sprintf("%s: %s\r\n", key, value)
 	}
-	buffer += "\r\n"
 	_, err := w.Writer.Write([]byte(buffer))
+	return err
+}
+
+func (w *Writer) WriteDone() error {
+	_, err := w.Writer.Write([]byte("\r\n"))
 	return err
 }
